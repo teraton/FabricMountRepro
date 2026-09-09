@@ -5,8 +5,15 @@ Intermittent `SIGSEGV` in `facebook::react::MountingCoordinator::pullTransaction
 `mqt_v_js` thread.
 
 This repo is the stock `@react-native-community/cli init` template for 0.86.3 with the sample
-screen swapped for a plain list of 40 rows. **No dependencies were added.**
-`react-native-safe-area-context` is what the template itself ships with.
+screen replaced by a plain list, plus one native module (`AsyncStorage`) doing real I/O from a
+mount-time `useEffect`.
+
+That native work is the part that matters. **A bare template with no mount-time native work
+did not reproduce this** in 40 fresh-install launches with accessibility traversal running —
+see the Actions tab. What reproduces it is native module work running concurrently with the
+first Fabric mount.
+
+`DEFER_NATIVE_WORK` in `App.tsx` flips the workaround on and off.
 
 ## What triggers it
 

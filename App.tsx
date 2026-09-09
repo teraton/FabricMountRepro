@@ -2,21 +2,51 @@
  * Minimal reproducer for an intermittent SIGSEGV in
  * facebook::react::MountingCoordinator::pullTransaction during the first Fabric mount.
  *
- * This is the stock `@react-native-community/cli init` template for 0.86.3 with the sample
- * screen swapped for a plain list. No dependencies were added — `react-native-safe-area-context`
- * is what the template itself ships with.
+ * This is the stock `@react-native-community/cli init` template for 0.86.3, with:
+ *   - the sample screen replaced by a plain list, and
+ *   - a native module (AsyncStorage) doing real I/O from a mount-time `useEffect`.
  *
- * The point is that an ordinary first render is enough. What is needed alongside it is a
- * freshly installed app, which starts slowly because it has no dexopt profile, and something
- * walking the accessibility tree while that first mount is still in flight.
+ * The native work is the part that matters. A bare template with no mount-time native work
+ * did NOT reproduce this in 40 fresh-install launches with accessibility traversal running
+ * (see README). Adding native I/O concurrent with the first mount is what reproduces it.
  *
- * See README.md for the exact commands and the measured rates.
+ * `DEFER_NATIVE_WORK` flips the workaround: when true, the same work is moved behind
+ * `InteractionManager.runAfterInteractions` so the first commit completes before it starts.
  */
-import { StatusBar, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import {
+  InteractionManager,
+  StatusBar,
+  StyleSheet,
+  Text,
+  useColorScheme,
+  View,
+} from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-/** Enough of a first commit to be representative of a real screen. */
+/**
+ * Set true to apply the workaround. Left false so a default checkout reproduces the bug.
+ * Building both ways is how the two rows in the README's results table were produced.
+ */
+const DEFER_NATIVE_WORK = false;
+
 const ROWS = Array.from({ length: 40 }, (_, index) => `Row ${index + 1}`);
+
+/**
+ * Stands in for whatever real native work an app does at startup — opening a database,
+ * reading a cache, restoring session state. The volume matters only in that it has to still
+ * be running while the first mount commits.
+ */
+async function doNativeWork(): Promise<number> {
+  const entries: [string, string][] = Array.from({ length: 200 }, (_, index) => [
+    `key-${index}`,
+    JSON.stringify({ index, payload: 'x'.repeat(128) }),
+  ]);
+  await AsyncStorage.multiSet(entries);
+  const read = await AsyncStorage.multiGet(entries.map(([key]) => key));
+  return read.length;
+}
 
 function App() {
   const isDarkMode = useColorScheme() === 'dark';
@@ -31,11 +61,37 @@ function App() {
 
 function AppContent() {
   const safeAreaInsets = useSafeAreaInsets();
+  const [loaded, setLoaded] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = () => {
+      doNativeWork().then(count => {
+        if (!cancelled) setLoaded(count);
+      });
+    };
+
+    if (DEFER_NATIVE_WORK) {
+      const handle = InteractionManager.runAfterInteractions(run);
+      return () => {
+        cancelled = true;
+        handle.cancel();
+      };
+    }
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <View style={[styles.container, { paddingTop: safeAreaInsets.top }]} testID="app-root">
       <Text style={styles.title} testID="header">
         Fabric mount repro
+      </Text>
+      <Text testID="status">
+        {loaded === null ? 'loading' : `loaded ${loaded} entries`}
       </Text>
       {ROWS.map(row => (
         <View key={row} style={styles.row} testID={`row-${row}`}>

@@ -27,6 +27,14 @@ It looks like a race that needs two things at once:
 
 Neither alone reproduced it. Both together did.
 
+## Note on the debug build
+
+`android/app/build.gradle` sets `debuggableVariants = []` so the debug APK bundles its JS
+rather than loading it from a Metro packager. Without that, a debug build launched on a
+machine with no Metro running never executes any JS — logcat shows *"The packager does not
+seem to be running"* and nothing mounts, so the crash cannot occur and the run looks clean.
+The workflow now asserts `Running "main"` appears in each launch for that reason.
+
 ## Reproduce
 
 Everything runs through GitHub Actions so the emulator and host are reproducible. Go to

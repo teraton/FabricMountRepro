@@ -18,6 +18,14 @@ react {
     // cliFile = file("../../node_modules/react-native/cli.js")
 
     /* Variants */
+    //   Bundle JS into the debug APK instead of loading it from a Metro packager.
+    //
+    //   Without this, a debug build launched on a machine with no Metro server never
+    //   executes any JS at all — logcat shows "The packager does not seem to be running"
+    //   and the app sits on a red box. Two reproduction runs here returned 0 crashes for
+    //   exactly that reason before it was noticed.
+    debuggableVariants = []
+
     //   The list of variants to that are debuggable. For those we're going to
     //   skip the bundling of the JS bundle and the assets. Default is "debug", "debugOptimized".
     //   If you add flavors like lite, prod, etc. you'll have to list your debuggableVariants.

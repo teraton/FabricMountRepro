@@ -39,13 +39,14 @@ const ROWS = Array.from({ length: 40 }, (_, index) => `Row ${index + 1}`);
  * be running while the first mount commits.
  */
 async function doNativeWork(): Promise<number> {
-  const entries: [string, string][] = Array.from({ length: 200 }, (_, index) => [
-    `key-${index}`,
-    JSON.stringify({ index, payload: 'x'.repeat(128) }),
-  ]);
-  await AsyncStorage.multiSet(entries);
-  const read = await AsyncStorage.multiGet(entries.map(([key]) => key));
-  return read.length;
+  const keys = Array.from({ length: 200 }, (_, index) => `key-${index}`);
+  const entries: Record<string, string> = {};
+  for (const [index, key] of keys.entries()) {
+    entries[key] = JSON.stringify({ index, payload: 'x'.repeat(128) });
+  }
+  await AsyncStorage.setMany(entries);
+  const read = await AsyncStorage.getMany(keys);
+  return Object.keys(read).length;
 }
 
 function App() {

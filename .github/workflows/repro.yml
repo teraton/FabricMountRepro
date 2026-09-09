@@ -1,0 +1,110 @@
+name: Reproduce Fabric mount crash
+
+# Builds the app and cold-launches it repeatedly on an API 34 x86_64 emulator, counting
+# native crashes. Nothing is attached to the app while it runs — no Appium, no test
+# framework, just adb.
+#
+# Two variables, both settable when dispatching:
+#
+#   fresh_install       reinstall before every launch. A freshly installed app has no dexopt
+#                       profile, so startup is JIT-heavy and the first Fabric mount stays in
+#                       flight longer. This is what makes the window wide enough to hit.
+#
+#   accessibility_poll  run `uiautomator dump` in a loop during the launch window. This is
+#                       the same accessibility-tree traversal any automation framework — or
+#                       TalkBack — performs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Number of cold launches
+        type: string
+        default: "40"
+      fresh_install:
+        description: Reinstall the APK before every launch
+        type: boolean
+        default: true
+      accessibility_poll:
+        description: Traverse the accessibility tree during launch
+        type: boolean
+        default: false
+      api_level:
+        description: Android API level
+        type: choice
+        options: ["34", "29"]
+        default: "34"
+
+jobs:
+  repro:
+    name: API ${{ inputs.api_level }} · fresh=${{ inputs.fresh_install }} · a11y=${{ inputs.accessibility_poll }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - run: npm ci
+
+      - name: Build debug APK
+        working-directory: android
+        # x86_64 only — that is what the emulator runs, and it keeps the build short.
+        run: ./gradlew assembleDebug -PreactNativeArchitectures=x86_64 --no-daemon
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Cold-launch repeatedly and count native crashes
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ inputs.api_level }}
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          # One line: the runner passes `script` to `sh -c`, where backslash continuations do
+          # not survive. No ": " anywhere either, since this is an unquoted YAML scalar.
+          script: APK=$(find android/app/build/outputs/apk -name '*.apk' | head -1); adb install -r "$APK"; mkdir -p artifacts; CRASHES=0; for i in $(seq 1 ${{ inputs.iterations }}); do adb shell am force-stop com.fabricmountrepro; if [ "${{ inputs.fresh_install }}" = "true" ]; then adb uninstall com.fabricmountrepro >/dev/null 2>&1 || true; adb install "$APK" >/dev/null; fi; sleep 2; adb logcat -c; adb shell am start -n com.fabricmountrepro/.MainActivity; if [ "${{ inputs.accessibility_poll }}" = "true" ]; then for j in $(seq 1 30); do adb shell uiautomator dump /sdcard/d.xml >/dev/null 2>&1 || true; done; else sleep 10; fi; adb logcat -d > "artifacts/launch-$i.txt"; if grep -q "Fatal signal 11" "artifacts/launch-$i.txt"; then CRASHES=$((CRASHES+1)); echo "iteration $i CRASH"; else echo "iteration $i ok"; rm -f "artifacts/launch-$i.txt"; fi; done; echo "$CRASHES" > artifacts/crash-count.txt; echo "TOTAL_CRASHES $CRASHES of ${{ inputs.iterations }}"
+
+      - name: Summarise
+        if: always()
+        run: |
+          COUNT=$(cat artifacts/crash-count.txt 2>/dev/null || echo unknown)
+          {
+            echo "## ${COUNT} native crash(es) in ${{ inputs.iterations }} cold launches"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| API level | ${{ inputs.api_level }} |"
+            echo "| Fresh install each launch | ${{ inputs.fresh_install }} |"
+            echo "| Accessibility traversal during launch | ${{ inputs.accessibility_poll }} |"
+            echo
+            if [ "$COUNT" != "0" ] && [ "$COUNT" != "unknown" ]; then
+              echo '```'
+              grep -m1 -A6 "Fatal signal 11" artifacts/launch-*.txt 2>/dev/null | head -12
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload crash logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-api${{ inputs.api_level }}-fresh${{ inputs.fresh_install }}-a11y${{ inputs.accessibility_poll }}-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: warn

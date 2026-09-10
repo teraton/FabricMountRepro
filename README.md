@@ -71,8 +71,9 @@ done
 | Host | `ubuntu-24.04`, 4-core GitHub-hosted runner |
 | Emulator | API 34, `x86_64`, `google_apis`, KVM-accelerated |
 
-Never reproduced on `arm64-v8a` (24 fresh-install launches, including under full host CPU
-saturation). API 29 appears much rarer than API 34.
+`arm64-v8a` reproduces it too, given accessibility traversal — 24 fresh-install launches
+*without* traversal did not, which is what made it look arm64-immune at first. Architecture
+is not the discriminating variable. API 29 appears rarer than API 34.
 
 ## Crash
 
